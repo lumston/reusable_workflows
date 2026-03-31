@@ -1,0 +1,97 @@
+name: Release merged to main reusable
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        required: true
+        type: string
+      base_ref:
+        required: false
+        type: string
+        default: main
+      head_ref:
+        required: true
+        type: string
+      merged:
+        required: true
+        type: boolean
+    secrets:
+      token:
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  promote-release:
+    if: inputs.merged && startsWith(inputs.head_ref, 'release/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract version
+        id: vars
+        shell: bash
+        run: |
+          BRANCH="${{ inputs.head_ref }}"
+          VERSION="${BRANCH#release/}"
+          VERSION="${VERSION#v}"
+          FINAL_TAG="v${VERSION}"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "final_tag=$FINAL_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.base_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.token }}
+
+      - name: Fetch tags
+        shell: bash
+        run: git fetch --force --tags origin
+
+      - name: Find latest RC
+        id: latest_rc
+        shell: bash
+        run: |
+          VERSION="${{ steps.vars.outputs.version }}"
+          RC_TAG=$(git tag -l "v${VERSION}-rc.*" | sort -V | tail -1)
+
+          if [ -z "$RC_TAG" ]; then
+            echo "No RC tags found for v${VERSION}"
+            exit 1
+          fi
+
+          echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure final tag does not already exist
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+        shell: bash
+        run: |
+          TAG="${{ steps.vars.outputs.final_tag }}"
+          if gh api "repos/${{ inputs.repository }}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Final tag $TAG already exists"
+            exit 1
+          fi
+
+      - name: Create final stable tag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.vars.outputs.final_tag }}"
+          git push origin "${{ steps.vars.outputs.final_tag }}"
+
+      - name: Create stable GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+        shell: bash
+        run: |
+          gh release create "${{ steps.vars.outputs.final_tag }}" \
+            --target "${{ inputs.base_ref }}" \
+            --title "${{ steps.vars.outputs.final_tag }}" \
+            --generate-notes
