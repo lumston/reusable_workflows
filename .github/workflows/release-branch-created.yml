@@ -1,0 +1,78 @@
+name: Release branch created reusable
+
+on:
+  workflow_call:
+    inputs:
+      branch_name:
+        required: true
+        type: string
+      repository:
+        required: true
+        type: string
+    secrets:
+      token:
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  create-initial-rc:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract version
+        id: vars
+        shell: bash
+        run: |
+          BRANCH="${{ inputs.branch_name }}"   # release/1.2.0 or release/v1.2.0
+          VERSION="${BRANCH#release/}"
+          VERSION="${VERSION#v}"
+          TAG="v${VERSION}-rc.1"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout target repository branch
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.branch_name }}
+          fetch-depth: 0
+          token: ${{ secrets.token }}
+
+      - name: Ensure rc.1 does not already exist
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+        shell: bash
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+
+          if gh api "repos/${{ inputs.repository }}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists"
+            exit 1
+          fi
+
+          if gh api "repos/${{ inputs.repository }}/releases/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Release for $TAG already exists"
+            exit 1
+          fi
+
+      - name: Create rc.1 tag
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.vars.outputs.tag }}"
+          git push origin "${{ steps.vars.outputs.tag }}"
+
+      - name: Create prerelease
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+        shell: bash
+        run: |
+          gh release create "${{ steps.vars.outputs.tag }}" \
+            --target "${{ inputs.branch_name }}" \
+            --title "${{ steps.vars.outputs.tag }}" \
+            --prerelease \
+            --generate-notes
