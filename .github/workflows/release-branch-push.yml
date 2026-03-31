@@ -1,0 +1,111 @@
+name: Release branch push reusable
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        required: true
+        type: string
+      branch_name:
+        required: true
+        type: string
+    secrets:
+      token:
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  create-next-rc:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-rc-${{ inputs.repository }}-${{ inputs.branch_name }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Extract version
+        id: vars
+        shell: bash
+        run: |
+          BRANCH="${{ inputs.branch_name }}"   # release/1.2.0 or release/v1.2.0
+          VERSION="${BRANCH#release/}"
+          VERSION="${VERSION#v}"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout branch and tags
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository }}
+          ref: ${{ inputs.branch_name }}
+          fetch-depth: 0
+          token: ${{ secrets.token }}
+
+      - name: Fetch tags
+        shell: bash
+        run: git fetch --force --tags origin
+
+      - name: Compute next RC
+        id: rc
+        shell: bash
+        run: |
+          VERSION="${{ steps.vars.outputs.version }}"
+          PREFIX="v${VERSION}-rc."
+
+          TAGS=$(git tag -l "${PREFIX}*")
+
+          if [ -z "$TAGS" ]; then
+            NEXT=1
+          else
+            MAX=$(echo "$TAGS" | sed -E "s/^v${VERSION}-rc\.([0-9]+)$/\1/" | sort -n | tail -1)
+            NEXT=$((MAX + 1))
+          fi
+
+          TAG="${PREFIX}${NEXT}"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Check candidate tag and release
+        id: exists
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+        shell: bash
+        run: |
+          TAG="${{ steps.rc.outputs.tag }}"
+
+          TAG_EXISTS=false
+          RELEASE_EXISTS=false
+
+          if gh api "repos/${{ inputs.repository }}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            TAG_EXISTS=true
+          fi
+
+          if gh api "repos/${{ inputs.repository }}/releases/tags/${TAG}" >/dev/null 2>&1; then
+            RELEASE_EXISTS=true
+          fi
+
+          echo "tag_exists=$TAG_EXISTS" >> "$GITHUB_OUTPUT"
+          echo "release_exists=$RELEASE_EXISTS" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag
+        if: steps.exists.outputs.tag_exists != 'true'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.rc.outputs.tag }}"
+          git push origin "${{ steps.rc.outputs.tag }}"
+
+      - name: Create prerelease
+        if: steps.exists.outputs.release_exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+        shell: bash
+        run: |
+          gh release create "${{ steps.rc.outputs.tag }}" \
+            --target "${{ inputs.branch_name }}" \
+            --title "${{ steps.rc.outputs.tag }}" \
+            --prerelease \
+            --generate-notes

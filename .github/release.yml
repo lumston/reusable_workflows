@@ -1,0 +1,46 @@
+# .github/release.yml
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+      - skip-changelog
+      - dependencies
+    authors:
+      - dependabot
+      - dependabot[bot]
+
+  categories:
+    - title: "🚀 Features"
+      labels:
+        - feat
+        - feature
+
+    - title: "🐛 Bug Fixes"
+      labels:
+        - fix
+        - bugfix
+        - hotfix
+
+    - title: "♻️ Refactors"
+      labels:
+        - refactor
+
+    - title: "🧪 Tests"
+      labels:
+        - test
+        - tests
+
+    - title: "📝 Documentation"
+      labels:
+        - docs
+        - documentation
+
+    - title: "🧹 Maintenance"
+      labels:
+        - chore
+        - ci
+        - build
+
+    - title: "⚠️ Breaking Changes"
+      labels:
+        - breaking-change
